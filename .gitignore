@@ -16,6 +16,9 @@ dist/
 *.egg-info/
 .eggs/
 
+# Python build cache from Debian source build
+.pybuild/
+
 # Environment and secrets
 .env
 .env.*
