@@ -1,0 +1,36 @@
+cat > .gitignore <<'EOF'
+# Python
+__pycache__/
+*.py[cod]
+*$py.class
+
+# Virtual environments
+.venv/
+venv/
+env/
+myenv/
+
+# Packaging
+build/
+dist/
+*.egg-info/
+
+# Secrets
+.env
+.env.*
+*.key
+*.pem
+
+# LinuxLearn local configuration
+.config/
+sessions/
+*.log
+
+# IDE
+.vscode/
+.idea/
+
+# OS
+.DS_Store
+Thumbs.db
+EOF

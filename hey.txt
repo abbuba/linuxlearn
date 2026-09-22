@@ -1,0 +1,3 @@
+./myenv/lib/python3.12/site-packages/pillow.libs/libavif-8a7f9d56.so.16.4.2
+./myenv/lib/python3.12/site-packages/pydantic_core/_pydantic_core.cpython-312-x86_64-linux-gnu.so
+./myenv/lib/python3.12/site-packages/PIL/_imaging.cpython-312-x86_64-linux-gnu.so
