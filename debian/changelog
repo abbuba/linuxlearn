@@ -1,0 +1,6 @@
+linuxlearn (0.2.0-3) noble; urgency=medium
+
+  * Add the Launchpad build dependency for the PEP 517 pybuild plugin so the
+    Debian package can build cleanly with pyproject-based metadata.
+
+ -- MD Abbubakar (n.A) <abbubakar.p786@gmail.com>  Tue, 22 Sep 2026 17:50:29 +0530
