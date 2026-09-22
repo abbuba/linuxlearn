@@ -1,0 +1,22 @@
+Source: linuxlearn
+Section: python
+Priority: optional
+Maintainer: MD Abbubakar (n.A) <abbubakar.p786@gmail.com>
+Build-Depends: debhelper (>= 13),
+ dh-python,
+ pybuild-plugin-pyproject,
+ python3-all,
+ python3-setuptools,
+ python3-wheel
+Standards-Version: 4.7.0
+Rules-Requires-Root: no
+Homepage: https://github.com/abbuba/linuxlearn
+Vcs-Git: https://github.com/abbuba/linuxlearn.git
+Vcs-Browser: https://github.com/abbuba/linuxlearn
+
+Package: linuxlearn
+Architecture: all
+Depends: ${misc:Depends}, ${python3:Depends}
+Description: Terminal-native Linux learning environment
+ A terminal-native Linux learning environment with AI-assisted command
+ discovery, safe execution, and interactive lessons.
