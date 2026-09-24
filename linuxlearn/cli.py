@@ -14,6 +14,7 @@ from rich.prompt import Prompt, Confirm
 from rich.syntax import Syntax
 from rich.text import Text
 from rich.align import Align
+from rich.box import ROUNDED
 
 from linuxlearn.config import (
     load_config,
@@ -27,7 +28,13 @@ from linuxlearn.security import SecurityValidator
 from linuxlearn.session import SessionManager
 from linuxlearn.context import TerminalContext
 from linuxlearn.filesystem import FilesystemGrounder
-from linuxlearn.learning import COURSE_ONE
+from linuxlearn.learning import (
+    COURSE_ONE,
+    LearningRenderer,
+    LearningPacing,
+    validate_guided_command,
+    default_pacing,
+)
 
 
 console = Console()
@@ -869,6 +876,7 @@ def execute_command_streaming(
     context: TerminalContext,
     user_request: str,
     proposal: dict,
+    quiet: bool = False,
 ):
     """
     Execute using the context's current cwd and environment.
@@ -931,35 +939,36 @@ def execute_command_streaming(
     if internal is not None:
         if internal["success"]:
 
-            console.print(
-                "[dim]"
-                "─── Terminal State Update ────────────────────"
-                "[/dim]"
-            )
-
-            if internal["type"] == "cd":
+            if not quiet:
                 console.print(
-                    "[bold green]"
-                    f"✓ Current directory: "
-                    f"{internal['current_cwd']}"
-                    "[/bold green]"
+                    "[dim]"
+                    "─── Terminal State Update ────────────────────"
+                    "[/dim]"
                 )
 
-            elif internal["type"] == "export":
-                console.print(
-                    "[bold green]"
-                    f"✓ Environment variable "
-                    f"{internal['variable']} updated."
-                    "[/bold green]"
-                )
+                if internal["type"] == "cd":
+                    console.print(
+                        "[bold green]"
+                        f"✓ Current directory: "
+                        f"{internal['current_cwd']}"
+                        "[/bold green]"
+                    )
 
-            elif internal["type"] == "unset":
-                console.print(
-                    "[bold green]"
-                    f"✓ Environment variable "
-                    f"{internal['variable']} removed."
-                    "[/bold green]"
-                )
+                elif internal["type"] == "export":
+                    console.print(
+                        "[bold green]"
+                        f"✓ Environment variable "
+                        f"{internal['variable']} updated."
+                        "[/bold green]"
+                    )
+
+                elif internal["type"] == "unset":
+                    console.print(
+                        "[bold green]"
+                        f"✓ Environment variable "
+                        f"{internal['variable']} removed."
+                        "[/bold green]"
+                    )
 
             context.record_action(
                 user_request=user_request,
@@ -967,6 +976,7 @@ def execute_command_streaming(
                 success=True,
                 exit_code=0,
                 duration_ms=0,
+                stdout=f"Current directory: {internal['current_cwd']}" if internal.get("type") == "cd" else "",
                 cwd_before=internal.get(
                     "previous_cwd",
                     context.get_display_cwd(),
@@ -1053,17 +1063,18 @@ def execute_command_streaming(
     stderr_buffer = []
 
     try:
-        console.print(
-            "[dim]"
-            "─── Execution Start ───────────────────────────"
-            "[/dim]"
-        )
+        if not quiet:
+            console.print(
+                "[dim]"
+                "─── Execution Start ───────────────────────────"
+                "[/dim]"
+            )
 
-        console.print(
-            "[dim]"
-            f"Working directory: {cwd_before}"
-            "[/dim]"
-        )
+            console.print(
+                "[dim]"
+                f"Working directory: {cwd_before}"
+                "[/dim]"
+            )
 
         process = subprocess.Popen(
             [
@@ -1090,11 +1101,12 @@ def execute_command_streaming(
                 if not line:
                     break
 
-                print(
-                    line,
-                    end="",
-                    flush=True,
-                )
+                if not quiet:
+                    print(
+                        line,
+                        end="",
+                        flush=True,
+                    )
 
                 stdout_buffer.append(
                     line
@@ -1212,38 +1224,38 @@ def execute_command_streaming(
             cwd_before=cwd_before,
         )
 
-        console.print(
-            "\n[dim]"
-            "─── Execution End ─────────────────────────────"
-            "[/dim]"
-        )
-
-        if success:
+        if not quiet:
             console.print(
-                "[bold green]"
-                "✓ Command completed successfully."
-                "[/bold green]"
+                "\n[dim]"
+                "─── Execution End ─────────────────────────────"
+                "[/dim]"
             )
 
-            if created_paths:
-                for path in created_paths[:5]:
-                    console.print(
-                        "[dim]"
-                        f"Tracked created path: "
-                        f"{path}"
-                        "[/dim]"
-                    )
+            if success:
+                console.print(
+                    "[bold green]"
+                    "✓ Command completed successfully."
+                    "[/bold green]"
+                )
 
-            return True
+                if created_paths:
+                    for path in created_paths[:5]:
+                        console.print(
+                            "[dim]"
+                            f"Tracked created path: "
+                            f"{path}"
+                            "[/dim]"
+                        )
 
-        console.print(
-            "[bold red]"
-            f"✗ Command exited with status "
-            f"{return_code}."
-            "[/bold red]"
-        )
+            else:
+                console.print(
+                    "[bold red]"
+                    f"✗ Command exited with status "
+                    f"{return_code}."
+                    "[/bold red]"
+                )
 
-        return False
+        return success
 
     except KeyboardInterrupt:
         duration_ms = int(
@@ -2186,61 +2198,14 @@ def _record_learning_event(session, label, command="", success=True, explanation
     )
 
 
-def _lesson_example_matches(example, record, cwd_before, context, relative_target=None):
-    """Check a learner's real command result against this lesson objective."""
-    if record is None or not record.success:
-        return False
-
-    expected = example["command"]
-    actual = record.command.strip()
-    if expected == 'echo "Hello Linux"':
-        return actual in {'echo "Hello Linux"', "echo 'Hello Linux'"} and "Hello Linux" in record.stdout
-    if expected == "pwd":
-        return actual == "pwd" and bool(record.stdout.strip())
-    if expected == "ls":
-        return actual == "ls"
-    if expected == "ls -la":
-        return actual == "ls -la"
-    if expected == "cd <directory>":
-        return actual.startswith("cd ") and record.cwd_after != cwd_before
-    if expected == "cd ..":
-        return actual == "cd .." and record.cwd_after != cwd_before
-    if expected == "cd ~":
-        return actual == "cd ~" and context.cwd == context.home
-    if expected == "cd <path>":
-        return actual.startswith("cd ") and record.cwd_after != cwd_before
-    if expected == "cd <relative path>":
-        try:
-            parts = shlex.split(actual)
-            return (
-                len(parts) == 2
-                and not os.path.isabs(os.path.expanduser(parts[1]))
-                and parts[1] != "~"
-                and record.cwd_after != cwd_before
-            )
-        except ValueError:
-            return False
-    if expected == "cd <absolute path>":
-        try:
-            parts = shlex.split(actual)
-            return (
-                len(parts) == 2
-                and os.path.isabs(os.path.expanduser(parts[1]))
-                and relative_target is not None
-                and context.cwd == relative_target
-            )
-        except ValueError:
-            return False
-    return False
-
-
-def _run_course_command(context, session, command, label):
+def _run_course_command(context, session, command, label, quiet=True):
     history_length = len(context.command_history)
     ok = execute_command_streaming(
         command,
         context,
         user_request=f"Learn: {label}",
         proposal={},
+        quiet=quiet,
     )
     record = context.command_history[-1] if len(context.command_history) > history_length else None
     _record_learning_event(session, label, command, ok)
@@ -2248,81 +2213,179 @@ def _run_course_command(context, session, command, label):
 
 
 def _run_course_lesson(lesson, context, session, lesson_number):
-    render_header(f"Basic · Course 1 · Lesson {lesson_number}")
-    console.print(f"[bold cyan]{lesson['title']}[/bold cyan]\n")
-    console.print(lesson["explanation"])
-    console.print("\n[dim]Type :back to return to the course menu.[/dim]\n")
+    clear_screen()
+    total_lessons = len(COURSE_ONE["lessons"])
+    LearningRenderer.render_lesson_banner(
+        course_num=1,
+        lesson_num=lesson_number,
+        total_lessons=total_lessons,
+        lesson_title=lesson["title"],
+    )
+    LearningRenderer.render_concept(lesson["concept"])
+    console.print("[dim]Type :back at any prompt to return to the course menu.[/dim]\n")
 
-    relative_target = None
-    for example in lesson["examples"]:
-        if lesson["title"] == "Moving Around" and example["command"] == "cd <directory>":
-            directories = [
-                entry["name"]
-                for entry in context.filesystem.snapshot()
-                if entry.get("kind") == "directory" and entry.get("name") not in {".", ".."}
-            ]
-            if directories:
-                console.print("[dim]Directories you can enter here: " + ", ".join(shlex.quote(name) for name in directories) + "[/dim]")
-        command_hint = example["command"]
-        if "<directory>" in command_hint:
-            command_hint = "cd <directory-name>"
-        elif command_hint == "cd <relative path>":
-            command_hint = "cd <directory-name>"
-        elif command_hint == "cd <absolute path>" and relative_target is not None:
-            command_hint = f"cd {relative_target}"
-        elif "<path>" in command_hint:
-            command_hint = "cd <relative-or-absolute-path>"
-        console.print(f"[bold]Try:[/bold] [green]{command_hint}[/green]")
+    steps = lesson.get("steps", [])
+    for step in steps:
+        prompt_hint = step.get("prompt_hint", "")
+        # Dynamic replacement for directory hints in Lesson 4 / 5
+        if prompt_hint == "cd <directory>":
+            try:
+                subdirs = [
+                    d.name for d in context.cwd.iterdir()
+                    if d.is_dir() and not d.name.startswith(".")
+                ] if context.cwd.exists() else []
+            except Exception:
+                subdirs = []
+            if subdirs:
+                console.print(f"[dim]Available directories here: {', '.join(subdirs[:5])}[/dim]")
+                prompt_hint = f"cd {subdirs[0]}"
+
+        LearningRenderer.render_try_it(prompt_hint, step.get("instruction", ""))
+
         while True:
-            command = input("$ ").strip()
-            if command.lower() in {":back", "back"}:
+            try:
+                raw_command = input("$ ").strip()
+            except (KeyboardInterrupt, EOFError):
+                console.print("\n[dim]Returning to course menu...[/dim]")
+                _record_learning_event(session, f"Lesson {lesson_number} interrupted", success=False)
+                return {"action": "back"}
+
+            if not raw_command:
+                console.print("[yellow]Please type the command shown above, or type ':back' to return.[/yellow]")
+                continue
+
+            if raw_command.lower() in {":back", "back"}:
                 _record_learning_event(session, f"Lesson {lesson_number} left before completion", success=False)
-                return False
-            cwd_before = context.get_display_cwd()
-            ok, record = _run_course_command(context, session, command, f"Lesson {lesson_number}: {lesson['title']}")
-            if _lesson_example_matches(example, record, cwd_before, context, relative_target):
-                if example["command"] == "cd <relative path>":
-                    relative_target = context.cwd
-                console.print(f"\n[dim]{example['why']}[/dim]")
-                after = example["after"].format(cwd=context.get_display_cwd())
-                console.print(f"[dim]{after}[/dim]\n")
-                break
-            if not ok:
-                console.print("[yellow]Try again after checking the command and your current directory.[/yellow]")
-            else:
-                console.print("[yellow]That ran successfully. Try the command shown for this step so we can observe this concept.[/yellow]")
+                return {"action": "back"}
+
+            is_valid, err_msg, exec_cmd = validate_guided_command(raw_command, step, context)
+            if not is_valid:
+                if err_msg == "__BACK__":
+                    return {"action": "back"}
+                console.print(f"[yellow]{err_msg}[/yellow]\n")
+                continue
+
+            # Command is valid! Pacing before execution result
+            default_pacing.stage("after_input")
+
+            # Execute real command in real terminal context
+            ok, record = _run_course_command(
+                context,
+                session,
+                exec_cmd,
+                f"Course 1 Lesson {lesson_number}: {lesson['title']}",
+                quiet=True,
+            )
+
+            # Display terminal output
+            stdout_text = record.stdout if record else ""
+            LearningRenderer.render_terminal_output(stdout_text, cwd=context.get_display_cwd())
+            default_pacing.stage("after_output")
+
+            # What just happened
+            what_happened = step.get("what_happened", "")
+            LearningRenderer.render_what_happened(what_happened, cwd=context.get_display_cwd())
+            default_pacing.stage("after_explanation")
+
+            # Command breakdown
+            breakdown = step.get("breakdown")
+            if breakdown:
+                LearningRenderer.render_command_breakdown(breakdown)
+                default_pacing.stage("after_breakdown")
+
+            # Practical examples
+            examples = step.get("examples", [])
+            if examples:
+                LearningRenderer.render_practical_examples(examples)
+                default_pacing.stage("after_examples")
+
+            break
+
+    # End of lesson recap
+    recap = lesson.get("recap", [])
+    if recap:
+        LearningRenderer.render_what_you_learned(recap)
+        default_pacing.stage("after_recap")
 
     _record_learning_event(session, f"Lesson {lesson_number} completed")
-    console.print("[bold green]Lesson complete.[/bold green]")
-    input("Press Enter to continue...")
-    return True
+
+    # Ask whether to continue to next lesson
+    choice = LearningRenderer.render_next_action_prompt(lesson_number, total_lessons)
+    if choice in {"", "1", "continue", "y", "yes"}:
+        return {"action": "continue", "next_lesson": lesson_number + 1}
+    return {"action": "back"}
 
 
 def _run_course_challenge(context, session):
-    render_header("Basic · Course 1 · Final Challenge")
-    console.print("[bold cyan]Your challenge[/bold cyan]\n")
-    console.print("Navigate to your home directory, find a directory you can enter, enter it, and prove where you are.")
-    console.print("Use `pwd`, `ls`, and `cd` as needed. The goal is to finish inside a real directory below your home directory.")
-    console.print("\n[dim]Type :back to leave the challenge. Your progress will remain incomplete.[/dim]\n")
+    clear_screen()
+    bar = "─" * 70
+    console.print(f"[dim]{bar}[/dim]")
+    console.print("[bold yellow]COURSE 1 · FINAL CHALLENGE[/bold yellow]  │  [bold white]Demonstrate Terminal Navigation[/bold white]")
+    console.print(f"[dim]{bar}[/dim]\n")
+
+    challenge_info = (
+        "Put your skills to the test in a real terminal challenge!\n\n"
+        "[bold cyan]Your Goal:[/bold cyan]\n"
+        "1. Return to your home directory (`cd ~`)\n"
+        "2. Find an existing directory you can enter (`ls`)\n"
+        "3. Enter that directory (`cd <name>`)\n"
+        "4. Prove your new location (`pwd`)\n\n"
+        "[dim]Type :back to leave the challenge at any time.[/dim]"
+    )
+    console.print(
+        Panel(
+            challenge_info,
+            title="[bold yellow]MISSION BRIEFING[/bold yellow]",
+            title_align="left",
+            border_style="yellow",
+            box=ROUNDED,
+            padding=(1, 2),
+        )
+    )
+    console.print()
 
     history_start = len(context.command_history)
     start_cwd = context.cwd
     visited_home = start_cwd == context.home
+
     while True:
-        command = input("$ ").strip()
+        try:
+            command = input("$ ").strip()
+        except (KeyboardInterrupt, EOFError):
+            console.print("\n[dim]Returning to course menu...[/dim]")
+            _record_learning_event(session, "Final challenge left incomplete", success=False)
+            return False
+
+        if not command:
+            continue
+
         if command.lower() in {":back", "back"}:
             _record_learning_event(session, "Final challenge left incomplete", success=False)
             return False
-        _run_course_command(context, session, command, "Course 1 final challenge")
+
+        ok, record = _run_course_command(context, session, command, "Course 1 final challenge", quiet=False)
+
         if context.cwd == context.home:
             visited_home = True
+
         try:
-            below_home = context.cwd != context.home and context.cwd.is_relative_to(context.home) and context.cwd.is_dir()
+            below_home = (
+                context.cwd != context.home
+                and context.cwd.is_relative_to(context.home)
+                and context.cwd.is_dir()
+            )
         except AttributeError:
-            below_home = context.cwd != context.home and context.home in context.cwd.parents and context.cwd.is_dir()
+            below_home = (
+                context.cwd != context.home
+                and context.home in context.cwd.parents
+                and context.cwd.is_dir()
+            )
+
         recent = context.command_history[history_start:]
         navigated_into_directory = any(
-            item.success and item.cwd_after == context.get_display_cwd() and item.cwd_before != item.cwd_after
+            item.success
+            and item.cwd_after == context.get_display_cwd()
+            and item.cwd_before != item.cwd_after
             for item in recent
         )
         proved_location = any(
@@ -2332,71 +2395,196 @@ def _run_course_challenge(context, session):
             and bool(item.stdout.strip())
             for item in recent
         )
+
         if visited_home and below_home and navigated_into_directory and proved_location:
-            console.print(f"\n[bold green]Challenge complete.[/bold green] You are in {context.get_display_cwd()}.")
-            _record_learning_event(session, "Final challenge completed", command, success=True, explanation=f"Verified current directory: {context.cwd}")
+            console.print()
+            success_text = Text()
+            success_text.append("🎉 CHALLENGE COMPLETE!\n\n", style="bold green")
+            success_text.append(f"You successfully navigated into {context.get_display_cwd()} and verified your location with pwd.\n", style="white")
+            success_text.append("You have completed all objectives for Course 1!", style="bold cyan")
+
+            console.print(
+                Panel(
+                    Align.center(success_text),
+                    border_style="green",
+                    box=ROUNDED,
+                    padding=(1, 2),
+                )
+            )
+            _record_learning_event(
+                session,
+                "Final challenge completed",
+                command,
+                success=True,
+                explanation=f"Verified current directory: {context.cwd}",
+            )
+            try:
+                input("\nPress Enter to return to the course menu...")
+            except (KeyboardInterrupt, EOFError):
+                pass
             return True
-        console.print(f"[dim]Current directory: {context.get_display_cwd()}[/dim]")
+
+        console.print(f"[dim]Current location: {context.get_display_cwd()}[/dim]")
 
 
 def learn_mode(context, session):
     while True:
-        render_header("Learn")
-        console.print("[bold cyan]Choose a level[/bold cyan]\n")
-        console.print("[1] Basic\n[2] Intermediate (coming later)\n[3] Advanced (coming later)\n[0] Back\n")
-        choice = input("> ").strip().lower()
+        clear_screen()
+        render_header("Learn Mode")
+
+        console.print("[bold cyan]Course Catalog[/bold cyan]\n")
+
+        catalog = Table(
+            show_header=False,
+            box=None,
+            padding=(0, 2),
+            pad_edge=False,
+        )
+        catalog.add_column("Key", style="bold yellow", width=5)
+        catalog.add_column("Course", style="bold white")
+        catalog.add_column("Level", style="cyan")
+        catalog.add_column("Status", style="dim")
+
+        catalog.add_row(
+            "[1]",
+            f"Course 1 — {COURSE_ONE['title']}",
+            "[Basic]",
+            "[bold green]Available[/bold green]",
+        )
+        catalog.add_row(
+            "[2]",
+            "Intermediate Courses",
+            "[Intermediate]",
+            "[dim]Coming soon[/dim]",
+        )
+        catalog.add_row(
+            "[3]",
+            "Advanced Courses",
+            "[Advanced]",
+            "[dim]Coming soon[/dim]",
+        )
+        catalog.add_row(
+            "[0]",
+            "Back to Main Menu",
+            "",
+            "",
+        )
+
+        console.print(catalog)
+        console.print("\n[dim]Select [1] or press Enter to launch Course 1 directly.[/dim]\n")
+
+        try:
+            choice = input("> ").strip().lower()
+        except (KeyboardInterrupt, EOFError):
+            return
+
         if choice in {"0", "back"}:
             return
-        if choice == "1":
+
+        if choice in {"", "1", "course 1", "c1"}:
+            completed_lessons = set()
+            challenge_complete = False
+
             while True:
-                render_header("Learn · Basic")
-                console.print("[bold cyan]Basic courses[/bold cyan]\n")
-                console.print("[1] Getting Comfortable with Linux")
-                console.print("[0] Back\n")
-                course_choice = input("> ").strip().lower()
-                if course_choice in {"0", "back"}:
+                clear_screen()
+                render_header("Basic · Course 1")
+                LearningRenderer.render_course_header(
+                    COURSE_ONE,
+                    completed_lessons,
+                    challenge_complete,
+                )
+                LearningRenderer.render_course_menu(
+                    COURSE_ONE,
+                    completed_lessons,
+                    challenge_complete,
+                )
+
+                total_lessons = len(COURSE_ONE["lessons"])
+                next_rec = 1
+                for i in range(1, total_lessons + 1):
+                    if i not in completed_lessons:
+                        next_rec = i
+                        break
+                else:
+                    next_rec = total_lessons + 1
+
+                if next_rec <= total_lessons:
+                    rec_label = f"Lesson {next_rec}"
+                elif not challenge_complete:
+                    rec_label = "Final Challenge"
+                else:
+                    rec_label = "Lesson 1 (Review)"
+
+                console.print(f"[dim]Select a lesson (1-6), or press Enter for {rec_label}.[/dim]")
+
+                try:
+                    selection = input("> ").strip().lower()
+                except (KeyboardInterrupt, EOFError):
                     break
-                if course_choice != "1":
-                    console.print("[yellow]Choose Course 1 or 0.[/yellow]")
+
+                if selection in {"0", "back"}:
+                    break
+
+                if not selection:
+                    if next_rec <= total_lessons:
+                        target_lesson = next_rec
+                    elif not challenge_complete:
+                        target_lesson = 6
+                    else:
+                        target_lesson = 1
+                elif selection.isdigit():
+                    target_lesson = int(selection)
+                else:
+                    console.print("[yellow]Please choose a lesson (1-5), 6 for Final Challenge, or 0 to return.[/yellow]")
                     pause(0.3)
                     continue
-                completed_lessons = set()
-                challenge_complete = False
-                while True:
-                    render_header("Learn · Basic · Course 1")
-                    console.print(f"[bold cyan]{COURSE_ONE['title']}[/bold cyan]\n")
-                    for index, lesson in enumerate(COURSE_ONE["lessons"], 1):
-                        mark = "✓" if index in completed_lessons else " "
-                        console.print(f"[{index}] [{mark}] Lesson {index} — {lesson['title']}")
-                    challenge_mark = "✓" if challenge_complete else " "
-                    console.print(f"[6] [{challenge_mark}] Final challenge\n[0] Back\n")
-                    selection = input("> ").strip().lower()
-                    if selection in {"0", "back"}:
-                        break
-                    if selection.isdigit() and 1 <= int(selection) <= 5:
-                        number = int(selection)
-                        if _run_course_lesson(COURSE_ONE["lessons"][number - 1], context, session, number):
-                            completed_lessons.add(number)
-                        continue
-                    if selection == "6":
-                        if len(completed_lessons) < len(COURSE_ONE["lessons"]):
-                            console.print("[yellow]Complete all five lessons before the final challenge.[/yellow]")
+
+                if 1 <= target_lesson <= total_lessons:
+                    current_idx = target_lesson
+                    while current_idx <= total_lessons:
+                        res = _run_course_lesson(
+                            COURSE_ONE["lessons"][current_idx - 1],
+                            context,
+                            session,
+                            current_idx,
+                        )
+                        completed_lessons.add(current_idx)
+
+                        if res.get("action") == "continue":
+                            current_idx = res.get("next_lesson", current_idx + 1)
+                            if current_idx > total_lessons:
+                                ch_res = _run_course_challenge(context, session)
+                                if ch_res:
+                                    challenge_complete = True
+                                break
+                        else:
+                            break
+
+                elif target_lesson == 6:
+                    if len(completed_lessons) < total_lessons:
+                        console.print("\n[yellow]Complete all five lessons before taking the final challenge.[/yellow]")
+                        try:
                             input("Press Enter to continue...")
-                            continue
-                        challenge_complete = _run_course_challenge(context, session)
-                        if challenge_complete:
-                            _record_learning_event(session, "Course 1 completed", success=True)
-                            console.print("[bold green]Course 1 complete. Your completion is included in this session's study notes.[/bold green]")
-                            input("Press Enter to continue...")
+                        except (KeyboardInterrupt, EOFError):
+                            pass
                         continue
-                    console.print("[yellow]Choose a lesson, 6, or 0.[/yellow]")
+                    ch_res = _run_course_challenge(context, session)
+                    if ch_res:
+                        challenge_complete = True
+                        _record_learning_event(session, "Course 1 completed", success=True)
+                else:
+                    console.print("[yellow]Invalid option. Choose 1-6 or 0.[/yellow]")
                     pause(0.3)
+
         elif choice in {"2", "3"}:
-            render_header("Learn")
-            console.print("[yellow]This learning level is not available yet.[/yellow]")
-            input("Press Enter to return...")
+            render_header("Learn Mode")
+            console.print("\n[yellow]This learning level is coming soon![/yellow]\n")
+            try:
+                input("Press Enter to return...")
+            except (KeyboardInterrupt, EOFError):
+                pass
         else:
-            console.print("[yellow]Choose Basic, Intermediate, Advanced, or 0.[/yellow]")
+            console.print("[yellow]Invalid choice. Select 1 to start Course 1, or 0 to return.[/yellow]")
             pause(0.3)
 
 def main():
